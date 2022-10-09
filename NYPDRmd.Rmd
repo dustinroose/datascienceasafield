@@ -1,0 +1,70 @@
+---
+title: "NYPD Shooting Incident Data"
+output: pdf_document
+date: '2022-09-18'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+First, we import necessary packages and read the data in from the following url. The data is sourced from the city of new york's site and contains data for shooting incidents in New York from 2016-2021.
+
+```{r import_data, message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+NYPDdata <- read_csv(url)
+```
+
+Next we clean the data. We remove NYPD borough, precinct and jurisdiction data as well as specific location data. We change string dates and times into a combined date/time and rename columns. A summary follows.
+
+```{r clean_data, message=FALSE}
+NYPDdata <- NYPDdata %>% 
+  select(-c(BORO, PRECINCT, JURISDICTION_CODE, X_COORD_CD, Y_COORD_CD, Latitude, 
+            Longitude, Lon_Lat)) %>%
+  unite(OCCUR_DATE_TIME, OCCUR_DATE:OCCUR_TIME, sep = ' ', remove = TRUE) %>%
+  mutate(OCCUR_DATE_TIME = mdy_hms(OCCUR_DATE_TIME)) %>%
+  rename(DATE_TIME = OCCUR_DATE_TIME,
+         LOCATION_TYPE = LOCATION_DESC,
+         MURDER = STATISTICAL_MURDER_FLAG)
+summary(NYPDdata)
+```
+
+Two questions came to mind to explore. One was what is the safest time or block of time in New York. The other was which month was safest to travel to New York. These both come to mind, in case someone wants to travel to New York for vacation. 
+
+This first visualization is a bar chart of shootings that resulted in murder from 2016-2021 grouped by the hour in which it occurred. Based on the visualization it's easy to see that one is less likely to be involved in a shooting that results in murder between 6am-4pm. This might be explained by nighttime and darkness providing cover for those that are involved in shootings or by the fact that 6am-4pm are common work hours. It's possible that shootings often require that both perp and victim aren't currently tied up at work. 
+
+```{r murders_by_hour}
+murdersByHour <- NYPDdata %>% 
+  group_by(hour = format(lubridate::floor_date(DATE_TIME, 'hour'), "%H")) %>%
+  summarize(murders = sum(MURDER))
+ggplot(murdersByHour, aes(x = hour, y = murders)) + geom_bar(stat = "identity") + 
+  labs(title = "Shooting Murders By Hour - New York 2016-2021")
+```
+
+This visualization is a similar bar chart showing the number of murders that occurred during different months. Based on the visualization it appears that February is the safest month to travel to New York. One explanation for increased shootings resulting in murder during the summer months is that gun violence requires that people leave their house. And we're definitely less likely to leave our house in winter months.
+
+```{r murders_by_month_by_year}
+murdersByMonth <- NYPDdata %>%
+  group_by(month = format(lubridate::floor_date(DATE_TIME, 'month'), '%m')) %>%
+  summarize(murders = sum(MURDER))
+ggplot(murdersByMonth, aes(x = month, y = murders)) + geom_bar(stat = "identity") + 
+  labs(title = "Shooting Murders By Month - New York 2016-2021")
+```
+
+I've plotted a 4th-degree polynomial best-fit line against the plot of shooting by hour and printed the model for it's coefficients. One could use that model as a predictor for shooting risk at various times. Ideally, a 4th-degree polynomial shouldn't be used in this case, since you'd expect this data to be periodic and best-fit by a harmonic regression. In this case, I don't think it makes a lot of sense to use a model. In my opinion, this particular data wasn't well-suited to predictive models. Better might have been a harmonic regression on the total murders per month throughout 2016-2022, which I might have pursued but didn't. 
+
+```{r murders_by_month_by_year_model}
+murdersByHour$hour <- as.integer(murdersByHour$hour)
+ggplot(murdersByHour, aes(x = hour, y = murders)) + geom_bar(stat = "identity") + 
+  labs(title = "Shooting Murders By Hour - New York 2016-2021") +
+  stat_smooth(method="lm", se=TRUE, fill=NA,
+                formula=y ~ poly(x, 4, raw=TRUE),colour="red")
+model = lm(murdersByHour$murders ~ poly(murdersByHour$hour, 4, raw=TRUE))
+model
+
+```
+
+Lastly, I'll discuss any potential for bias. I believe that because my analysis didn't pursue points diverging on race and class it avoided most sources of bias that could arise from that analysis. My analysis looks at New York as a whole and the incidence of shootings throughout times and months. It could be argued that by not pursuing a more diversified analysis, I've hidden features of shootings in New York. For instance, it might be that in different locations, certain times and certain months are more prone to shootings than others. And that if you're of this or that race you have less a chance to be involved in shootings. My bias is one of over-generalization. 
