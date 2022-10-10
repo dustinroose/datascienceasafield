@@ -1,0 +1,138 @@
+---
+title: "Covid Data"
+output: pdf_document
+date: '2022-10-09'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The following importing and tidying of data is pulled from the lectures.
+
+```{r import_data, message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+url_in <- paste("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/", 
+  "csse_covid_19_data/csse_covid_19_time_series/", sep = "")
+file_names <- c(
+  "time_series_covid19_confirmed_global.csv",
+  "time_series_covid19_deaths_global.csv",
+  "time_series_covid19_confirmed_US.csv",
+  "time_series_covid19_deaths_US.csv")
+urls <- str_c(url_in, file_names)
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+US_cases <- read_csv(urls[3])
+US_deaths <- read_csv(urls[4])
+```
+
+```{r tidy_data}
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c(`Province/State`,
+                         `Country/Region`, Lat, Long),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(-c(Lat, Long))
+
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c(`Province/State`,
+                         `Country/Region`, Lat, Long),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(-c(Lat, Long))
+
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = `Country/Region`,
+         Province_State = `Province/State`) %>%
+  mutate(date = mdy(date))
+
+global <- global %>% filter(cases > 0)
+
+US_cases <- US_cases %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+US_deaths <- US_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+US <- US_cases %>%
+  full_join(US_deaths)
+
+global <- global %>%
+  unite("Combined_Key",
+        c(Province_State, Country_Region),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+
+uid_lookup_url <- paste("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/",
+  "master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv", sep = "")
+
+uid <- read_csv(uid_lookup_url) %>%
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+
+global <- global %>%
+  left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, date,
+         cases, deaths, Population,
+         Combined_Key)
+
+```
+
+Regarding the global data, I would want to know which country had the greatest death-to-cases ratio. This might indicate that more people died in this country due to worse healthcare, the environment's influence on survival rates, or the population in those countries differed in some way that predisposed them to death. There are certainly other explanations too. The following box and whisker plots show a quick summary. The first obviously has an outlier which is North Korea. Since a death to cases ratio of 6.0 is impossible, we conclude that that data is incomplete or has a typo and remove it. We also remove the data associated with MS Zaandam which was a cruise ship, not a country. The second box plot revealed one country that suffered the greatest death to cases ratio which is Yemen.
+
+Looking deeper into the recent history of Yemen reveals an ongoing armed conflict which must have surely contributed to this number. As I indicated, we should see that higher numbers would point to something that made surviving Covid difficult. In this case, I think life in Yemen was already incredibly difficult before Covid and so Covid likely took a sharper toll. 
+
+``` {r death_to_cases_ratio}
+global_country_death_to_cases <- global %>%
+  group_by(Country_Region) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths)) %>%
+  mutate(death_to_cases = deaths / cases) %>%
+  select(Country_Region, death_to_cases) %>%
+  arrange(death_to_cases)
+
+ggplot(data=global_country_death_to_cases, aes(x = death_to_cases)) + geom_boxplot()
+ggplot(data=filter(global_country_death_to_cases, 
+                   !(Country_Region %in% c("Korea, North", "MS Zaandam"))), 
+       aes(x = death_to_cases)) + geom_boxplot()
+
+```
+
+Lastly, since I currently live in Washington, DC. I'm going to plot death vs time for Washinton, DC and attempt to provide a model. The following is a plot of covid deaths in Washington DC from 2020 to present day. It appears that the deaths count rose most sharply in three periods at the very start, near the start of 2021, and near the start of 2022. Having lived in Washington, DC, I know that these last two periods of growth correspond to the relaxation of masking policies at various times throughout the Covid pandemic. It's likely the rise of the vaccine made the periods of increase less intense, so that's why the third bump is less pronounced.
+
+```{r washington_dc_deaths_v_time}
+US_washington_dc <- US %>%
+  filter(Combined_Key == "District of Columbia,District of Columbia,US")
+
+ggplot(US_washington_dc, aes(x=date, y=deaths)) +
+  geom_line() +
+  labs(title = "Covid Deaths vs Time in Washington, DC")
+```
+
+Lastly, let's attempt to create a crude model to fit the data. Viewing the data, it looks best fit by a log or root model, but I had trouble getting either of those to work. Hence, I've plotted a second degree polynomial to the data. On another note, we can get very good fits for the data using much higher degree polynomials. I've included the same model using a 23rd degree polynomial. One might think that this isn't very useful, but I argue that if for whatever reason we needed to do calculus on the data it would be much easier to perform those calculations on a smooth polynomial than the data itself.
+
+```{r washington_dc_deaths_v_time_model}
+US_washington_dc_numeric <- US_washington_dc %>%
+  mutate(date = as.numeric(date))
+ggplot(US_washington_dc_numeric, aes(x = date, y = deaths)) + geom_line() +
+  stat_smooth(method="lm", se=TRUE, fill=NA,
+                formula=y ~ poly(x,2),colour="red")
+ggplot(US_washington_dc_numeric, aes(x = date, y = deaths)) + geom_line() +
+  stat_smooth(method="lm", se=TRUE, fill=NA,
+                formula=y ~ poly(x,23),colour="red")
+```
+
+Lastly, let's discuss sources of bias. If this was the only analysis of this data you looked at you would only know that Yemen was hit hard by Covid and that Washington, DC is really a very small "state." That's hardly all the knowledge that can be wrought from this data. I looked at Washington DC because I live there, but if I had lived in New York, I would have likely looked at data for New York. In order to prevent that sort of bias I would need to treat each state equally and disregard the interest I have in my own location and provide a more complete analysis. 
